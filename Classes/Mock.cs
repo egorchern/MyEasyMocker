@@ -10,18 +10,22 @@ namespace MyEasyMocker
     public class Mock<T>
     {
         private readonly T originalObject;
-        private readonly Dictionary<string, object> methodNameToReturnValue;
+        private readonly Dictionary<string, MockMethodConfiguration> methodNameToConfiguration;
         private readonly Dictionary<string, int> methodNameToCallCount;
 
         public Mock(T mockedObject)
         {
             originalObject = mockedObject;
-            methodNameToReturnValue = new Dictionary<string, object>();
+            methodNameToConfiguration = new Dictionary<string, MockMethodConfiguration>();
             methodNameToCallCount = new Dictionary<string, int>();
         }
-
-        public void Setup(string methodName, object returnValue)
+        public void Setup(string methodName, object returnValue, MockParameter<object>[] parameters = null)
         {
+            if (parameters == null)
+            {
+                parameters = new MockParameter<object>[] {};
+            }
+            
             if (string.IsNullOrEmpty(methodName))
             {
                 throw new Exception("Method name cannot be null or empty");
@@ -44,33 +48,65 @@ namespace MyEasyMocker
                 throw new Exception($"Return type {expectedReturnType.Name} is not assignable from {returnValue.GetType().Name}");
             }
 
-            methodNameToReturnValue[methodName] = returnValue;
+            // verify parameters
+            ParameterInfo[] methodParameters = method.GetParameters();
+
+            if (methodParameters.Length > 0)
+            {
+                if (parameters == null || parameters.Length != methodParameters.Length)
+                {
+                    throw new Exception($"Parameter count mismatch");
+                }
+
+                for (int i = 0; i < parameters.Length; i++)
+                {
+                    ParameterInfo expectedParameter = methodParameters[i];
+                    MockParameter<object> actualParameter = parameters[i];
+
+                    if (!expectedParameter.ParameterType.IsAssignableFrom(actualParameter.ParameterType))
+                    {
+                        throw new Exception($"Parameter (name: {expectedParameter.Name}, position: {i}) is not assignable");
+                    }
+                }
+            }
+            
+            methodNameToConfiguration[methodName] = new MockMethodConfiguration(returnValue, parameters, method);
             methodNameToCallCount[methodName] = 0;
         }
 
-        public object Call(string methodName)
+        public object Call(string methodName, object[] parameters = null)
         {
             if (string.IsNullOrEmpty(methodName))
             {
                 throw new Exception("Method name cannot be null or empty");
             }
 
-            var methods = typeof(T).GetMethods(BindingFlags.Public | BindingFlags.Instance);
-            var method = methods.FirstOrDefault(method => method.Name == methodName);
+            MethodInfo[] methods = typeof(T).GetMethods(BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo? method = methods.FirstOrDefault(method => method.Name == methodName);
 
             if (method == null)
             {
                 throw new Exception($"Method {methodName} not accessible");
             }
 
-            if (!methodNameToReturnValue.TryGetValue(methodName, out object returnValue))
+            if (!methodNameToConfiguration.TryGetValue(methodName, out MockMethodConfiguration? configuration))
             {
                 throw new Exception($"Method {methodName} not setup");
             }
 
+            if (parameters == null)
+            {
+                parameters = new object[] {};
+            }
+
+            if (!configuration.CallMatches(parameters))
+            {
+                throw new Exception($"Parameter mismatch");
+            }
+
             methodNameToCallCount[methodName]++;
 
-            return returnValue;
+            return configuration.ReturnValue;
         }
 
         public int GetCallCount(string methodName)
